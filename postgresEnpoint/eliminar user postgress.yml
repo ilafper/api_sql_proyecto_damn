@@ -1,0 +1,15 @@
+info:
+  name: eliminar user postgress
+  type: http
+  seq: 3
+
+http:
+  method: DELETE
+  url: http://localhost:5500/api/deleteclipostgress/codigo12345
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5

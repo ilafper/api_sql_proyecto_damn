@@ -1,0 +1,25 @@
+info:
+  name: crear user postgress
+  type: http
+  seq: 2
+
+http:
+  method: POST
+  url: http://localhost:5500/api/crearclientepostgress
+  body:
+    type: json
+    data: |-
+      {
+        "nombre": "Ana",
+        "apellidos": "Garcia",
+        "telefono": "611223344",
+        "direccion": "Calle Mayor 10",
+        "correo": "ana.garcia@example.com"
+      }
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5

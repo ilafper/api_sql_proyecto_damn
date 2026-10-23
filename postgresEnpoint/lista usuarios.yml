@@ -1,0 +1,15 @@
+info:
+  name: lista usuarios
+  type: http
+  seq: 1
+
+http:
+  method: GET
+  url: http://localhost:5500/api/clientespostgress
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
