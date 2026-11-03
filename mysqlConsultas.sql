@@ -21,3 +21,35 @@ VALUES
 
 -- Consultar todos los clientes
 SELECT * FROM clientes ORDER BY id ASC;
+
+-- ----------------------------------------------------
+-- ESTRUCTURA PARA ESPACIOS / SITIOS Y RESERVAS
+-- ----------------------------------------------------
+
+-- 1. Tabla de Espacios / Sitios a alquilar
+CREATE TABLE IF NOT EXISTS espacios (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  nombre VARCHAR(120) NOT NULL,
+  descripcion TEXT,
+  ubicacion VARCHAR(150),
+  capacidad_maxima INT NOT NULL,
+  precio_por_dia DECIMAL(10, 2) NOT NULL,
+  estado VARCHAR(20) NOT NULL DEFAULT 'disponible',
+  creado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 2. Tabla de Reservas
+CREATE TABLE IF NOT EXISTS reservas (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  espacio_id INT NOT NULL,
+  usuario_id INT NOT NULL,
+  fecha_inicio DATE NOT NULL,
+  fecha_fin DATE NOT NULL,
+  numero_ocupantes INT NOT NULL,
+  precio_total DECIMAL(10, 2) NOT NULL,
+  estado VARCHAR(20) NOT NULL DEFAULT 'confirmada',
+  creado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_reserva_espacio FOREIGN KEY (espacio_id) REFERENCES espacios(id) ON DELETE CASCADE,
+  CONSTRAINT fk_reserva_usuario FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE CASCADE
+);
+
