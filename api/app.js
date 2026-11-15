@@ -10,7 +10,7 @@ const JWT_SECRET = "mi_clave_secreta_dam";
 app.use(cors());
 app.use(express.json());
 
-// Crear tablas si no existen automáticamente en la base de datos de Laragon
+// Crear tablas y migrar columnas automáticamente en Laragon
 async function inicializarTabla() {
   try {
     // 1. Tabla de usuarios
@@ -27,7 +27,7 @@ async function inicializarTabla() {
       )
     `);
 
-    // 2. Tabla de espacios / sitios para alquilar
+    // 2. Tabla de espacios / pistas
     await pool.query(`
       CREATE TABLE IF NOT EXISTS espacios (
         id INT AUTO_INCREMENT PRIMARY KEY,
@@ -41,36 +41,50 @@ async function inicializarTabla() {
       )
     `);
 
-    // 3. Tabla de reservas por fechas y ocupantes
+    // 3. Tabla de reservas
     await pool.query(`
       CREATE TABLE IF NOT EXISTS reservas (
         id INT AUTO_INCREMENT PRIMARY KEY,
         espacio_id INT NOT NULL,
         usuario_id INT NOT NULL,
-        fecha_inicio DATE NOT NULL,
-        fecha_fin DATE NOT NULL,
+        fecha_inicio DATE NULL,
+        fecha_fin DATE NULL,
         numero_ocupantes INT NOT NULL DEFAULT 1,
         precio_total DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
         estado VARCHAR(20) NOT NULL DEFAULT 'confirmada',
-        creado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        CONSTRAINT fk_reserva_espacio FOREIGN KEY (espacio_id) REFERENCES espacios(id) ON DELETE CASCADE,
-        CONSTRAINT fk_reserva_usuario FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE CASCADE
+        creado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `);
 
-    console.log("Tablas 'usuarios', 'espacios' y 'reservas' verificadas en MySQL");
+    // 4. Migración automática: añade las columnas si tu tabla no las tenía
+    const columnasAsegurar = [
+      "ALTER TABLE reservas ADD COLUMN fecha DATE NULL",
+      "ALTER TABLE reservas ADD COLUMN franja_horaria VARCHAR(50) NULL",
+      "ALTER TABLE reservas ADD COLUMN evento_id INT NULL",
+      "ALTER TABLE reservas ADD COLUMN espacio_id INT NULL"
+    ];
+
+    for (const sql of columnasAsegurar) {
+      try {
+        await pool.query(sql);
+      } catch (_) {
+        // La columna ya existía, no hace nada
+      }
+    }
+
+    console.log("Tablas 'usuarios', 'espacios' y 'reservas' sincronizadas en MySQL");
   } catch (err) {
     console.error("Error conectando a MySQL en Laragon:", err.message);
   }
 }
 inicializarTabla();
 
-// Ruta base de comprobación
+// Ruta base
 app.get("/", (req, res) => {
-  res.json({ mensaje: "API de Agenda con MySQL (Laragon) funcionando correctamente 🚀" });
+  res.json({ mensaje: "API funcionando correctamente 🚀" });
 });
 
-// Obtener todos los clientes
+// Clientes
 app.get(["/api/clientes", "/api/clientespostgress"], async (req, res) => {
   try {
     const [rows] = await pool.query("SELECT * FROM clientes ORDER BY id ASC");
@@ -80,77 +94,25 @@ app.get(["/api/clientes", "/api/clientespostgress"], async (req, res) => {
   }
 });
 
-
-// Crear cliente
-app.post(["/api/clientes", "/api/crearclientepostgress", "/api/crearclienteposgress"], async (req, res) => {
-  const { nombre, apellidos, telefono, direccion, correo } = req.body;
-  const code_user = 'codigo' + Math.floor(10000 + Math.random() * 90000);
-
-  try {
-    const sql = "INSERT INTO clientes (nombre, apellidos, telefono, direccion, correo, code_user) VALUES (?, ?, ?, ?, ?, ?)";
-    const [result] = await pool.query(sql, [nombre, apellidos, telefono, direccion, correo, code_user]);
-
-    const nuevoCliente = {
-      id: result.insertId,
-      nombre,
-      apellidos,
-      telefono,
-      direccion,
-      correo,
-      code_user
-    };
-
-    console.log("Cliente creado:", nuevoCliente);
-
-    res.status(201).json({
-      success: true,
-      mensaje: "Cliente creado correctamente",
-      cliente: nuevoCliente
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// RUTA DE REGISTRO
+// REGISTRO
 app.post("/api/auth/registro", async (req, res) => {
   const { email, password, password1, password2, nombre, nombre_completo, apellido, telefono, direccion, rol } = req.body;
-
-  // Soportar tanto password1/password2 como password
   const pass1 = password1 || password;
   const pass2 = password2 || password;
 
-  // 1. Validar que vengan email y contraseña
   if (!email || !pass1) {
-    return res.status(400).json({
-      success: false,
-      mensaje: "El correo y la contraseña son obligatorios"
-    });
+    return res.status(400).json({ success: false, mensaje: "El correo y la contraseña son obligatorios" });
   }
-
-  // 2. Comprobar en el backend si ambas contraseñas coinciden
   if (pass1 !== pass2) {
-    return res.status(400).json({
-      success: false,
-      mensaje: "Las contraseñas no coinciden"
-    });
+    return res.status(400).json({ success: false, mensaje: "Las contraseñas no coinciden" });
   }
 
   try {
-    // 3. Comprobar si el correo ya está registrado en la base de datos
-    const [existente] = await pool.query(
-      "SELECT id FROM usuarios WHERE email = ?",
-      [email]
-    );
-
+    const [existente] = await pool.query("SELECT id FROM usuarios WHERE email = ?", [email]);
     if (existente.length > 0) {
-      return res.status(400).json({
-        success: false,
-        mensaje: "Este correo electrónico ya está registrado"
-      });
+      return res.status(400).json({ success: false, mensaje: "Este correo electrónico ya está registrado" });
     }
 
-    // 4. Insertar el nuevo usuario en MySQL (con las columnas reales de la tabla)
     const nombreUsuario = nombre || nombre_completo || "";
     const rolUsuario = rol || "cliente";
 
@@ -158,77 +120,34 @@ app.post("/api/auth/registro", async (req, res) => {
       INSERT INTO usuarios (email, password, nombre, apellido, telefono, direccion, rol)
       VALUES (?, ?, ?, ?, ?, ?, ?)
     `;
-    const [resultado] = await pool.query(sql, [
-      email,
-      pass1,
-      nombreUsuario,
-      apellido || "",
-      telefono || "",
-      direccion || "",
-      rolUsuario
-    ]);
+    const [resultado] = await pool.query(sql, [email, pass1, nombreUsuario, apellido || "", telefono || "", direccion || "", rolUsuario]);
 
-    // 5. Responder con éxito
     res.status(201).json({
       success: true,
       mensaje: "Usuario registrado correctamente",
-      usuario: {
-        id: resultado.insertId,
-        email: email,
-        nombre: nombreUsuario,
-        rol: rolUsuario
-      }
+      usuario: { id: resultado.insertId, email: email, nombre: nombreUsuario, rol: rolUsuario }
     });
-
   } catch (error) {
-    console.error("Error en registro:", error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
-
-// login
-
+// LOGIN
 app.post("/api/auth/login", async (req, res) => {
   const { email, password } = req.body;
-
-  // 1. Validar que vengan ambos campos
   if (!email || !password) {
-    return res.status(400).json({
-      success: false,
-      mensaje: "Email y contraseña son obligatorios"
-    });
+    return res.status(400).json({ success: false, mensaje: "Email y contraseña son obligatorios" });
   }
 
   try {
-    // 2. Buscar si el usuario existe con ese correo y contraseña exacta
-    const [rows] = await pool.query(
-      "SELECT * FROM usuarios WHERE email = ? AND password = ?",
-      [email, password]
-    );
-
+    const [rows] = await pool.query("SELECT * FROM usuarios WHERE email = ? AND password = ?", [email, password]);
     if (rows.length === 0) {
-      return res.status(401).json({
-        success: false,
-        mensaje: "Correo o contraseña incorrectos"
-      });
+      return res.status(401).json({ success: false, mensaje: "Correo o contraseña incorrectos" });
     }
 
     const usuario = rows[0];
+    const token = jwt.sign({ id: usuario.id, email: usuario.email, rol: usuario.rol }, JWT_SECRET, { expiresIn: "24h" });
 
-    // 3. GENERAR EL TOKEN JWT
-    // Guardamos en el token los datos del usuario que Flutter pueda necesitar
-    const token = jwt.sign(
-      {
-        id: usuario.id,
-        email: usuario.email,
-        rol: usuario.rol
-      },
-      JWT_SECRET,
-      { expiresIn: "24h" } // El token durará 24 horas activo
-    );
-
-    // 4. Responder a Flutter con el token y sus datos (sin devolver la contraseña)
     res.json({
       success: true,
       mensaje: "Inicio de sesión correcto",
@@ -240,19 +159,15 @@ app.post("/api/auth/login", async (req, res) => {
         rol: usuario.rol
       }
     });
-
   } catch (error) {
-    console.error("Error en login:", error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
-
 // ==========================================
-// ESPACIOS / SITIOS PARA ALQUILAR
+// ESPACIOS / PISTAS
 // ==========================================
 
-// 1. Obtener todos los espacios
 app.get("/api/espacios", async (req, res) => {
   try {
     const [rows] = await pool.query("SELECT * FROM espacios ORDER BY id DESC");
@@ -262,157 +177,122 @@ app.get("/api/espacios", async (req, res) => {
   }
 });
 
-// 2. Obtener un espacio específico por ID
 app.get("/api/espacios/:id", async (req, res) => {
   const { id } = req.params;
   try {
     const [rows] = await pool.query("SELECT * FROM espacios WHERE id = ?", [id]);
-    if (rows.length === 0) {
-      return res.status(404).json({ success: false, mensaje: "Espacio no encontrado" });
-    }
+    if (rows.length === 0) return res.status(404).json({ success: false, mensaje: "Espacio no encontrado" });
     res.json({ success: true, espacio: rows[0] });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
-// 3. Crear un nuevo espacio (Para Admin: no pone fechas ni horas, solo los datos del sitio)
 app.post("/api/espacios", async (req, res) => {
-  const {
-    nombre,
-    descripcion,
-    ubicacion,
-    capacidad_maxima,
-    precio_por_dia,
-    estado
-  } = req.body;
-
-  // Validaciones de datos reales requeridos
+  const { nombre, descripcion, ubicacion, capacidad_maxima, precio_por_dia, estado } = req.body;
   if (!nombre || !capacidad_maxima || precio_por_dia === undefined) {
-    return res.status(400).json({
-      success: false,
-      mensaje: "Nombre, capacidad máxima y precio por día son obligatorios"
-    });
-  }
-
-  const capacidadNum = Number(capacidad_maxima);
-  const precioNum = Number(precio_por_dia);
-
-  if (isNaN(capacidadNum) || capacidadNum <= 0) {
-    return res.status(400).json({
-      success: false,
-      mensaje: "La capacidad máxima debe ser un número entero mayor que 0"
-    });
-  }
-
-  if (isNaN(precioNum) || precioNum < 0) {
-    return res.status(400).json({
-      success: false,
-      mensaje: "El precio por día debe ser un número válido"
-    });
+    return res.status(400).json({ success: false, mensaje: "Nombre, capacidad máxima y precio por día son obligatorios" });
   }
 
   try {
-    const sql = `
-      INSERT INTO espacios (nombre, descripcion, ubicacion, capacidad_maxima, precio_por_dia, estado)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `;
+    const sql = `INSERT INTO espacios (nombre, descripcion, ubicacion, capacidad_maxima, precio_por_dia, estado) VALUES (?, ?, ?, ?, ?, ?)`;
+    const [resultado] = await pool.query(sql, [nombre.trim(), descripcion || "", ubicacion || "", Number(capacidad_maxima), Number(precio_por_dia), estado || "disponible"]);
 
-    const [resultado] = await pool.query(sql, [
-      nombre.trim(),
-      descripcion ? descripcion.trim() : "",
-      ubicacion ? ubicacion.trim() : "",
-      capacidadNum,
-      precioNum,
-      estado ? estado.trim() : "disponible"
-    ]);
-
-    const nuevoEspacio = {
-      id: resultado.insertId,
-      nombre: nombre.trim(),
-      descripcion: descripcion ? descripcion.trim() : "",
-      ubicacion: ubicacion ? ubicacion.trim() : "",
-      capacidad_maxima: capacidadNum,
-      precio_por_dia: precioNum,
-      estado: estado ? estado.trim() : "disponible"
-    };
-
-    return res.status(201).json({
+    res.status(201).json({
       success: true,
       mensaje: "Espacio creado correctamente",
-      espacio: nuevoEspacio
+      espacio: { id: resultado.insertId, nombre, descripcion, ubicacion, capacidad_maxima, precio_por_dia, estado }
     });
   } catch (error) {
-    console.error("Error al crear espacio:", error);
-    return res.status(500).json({
-      success: false,
-      mensaje: "Error interno al crear el espacio",
-      error: error.message
-    });
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
-// RESERVAS (Día/Mes/Año y Franja Horaria)
+// ==========================================
+// RESERVAS (CONFIRMACIÓN DIRECTA & LISTA DE ESPERA)
+// ==========================================
 
-// Crear reserva verificando fecha y franja horaria
 app.post("/api/reservas", async (req, res) => {
-  const { evento_id, usuario_id, fecha, franja_horaria, estado } = req.body;
+  const espacioId = req.body.espacio_id || req.body.evento_id;
+  const { usuario_id, fecha, franja_horaria } = req.body;
 
-  // 1. Validaciones de campos obligatorios
-  if (!evento_id || !usuario_id || !fecha || !franja_horaria) {
+  if (!espacioId || !usuario_id || !fecha || !franja_horaria) {
     return res.status(400).json({
       success: false,
-      mensaje: "evento_id, usuario_id, fecha (YYYY-MM-DD) y franja_horaria son obligatorios"
+      mensaje: "espacio_id (o evento_id), usuario_id, fecha y franja_horaria son obligatorios"
     });
   }
 
   try {
-    // 2. Comprobar si ya existe una reserva activa en esa misma fecha y franja horaria
-    const [solapadas] = await pool.query(
-      `SELECT id FROM reservas 
-       WHERE evento_id = ? 
-         AND fecha = ? 
+    // 1. Comprobar si este mismo usuario ya tiene reserva activa
+    const [duplicada] = await pool.query(
+      `SELECT id, estado FROM reservas 
+       WHERE (espacio_id = ? OR evento_id = ?) 
+         AND (fecha = ? OR fecha_inicio = ?) 
          AND franja_horaria = ? 
+         AND usuario_id = ? 
          AND estado != 'cancelada'`,
-      [evento_id, fecha, franja_horaria]
+      [espacioId, espacioId, fecha, fecha, franja_horaria, usuario_id]
     );
 
-    if (solapadas.length > 0) {
+    if (duplicada.length > 0) {
       return res.status(400).json({
         success: false,
-        mensaje: "Esta franja horaria ya está reservada para esa fecha"
+        mensaje: duplicada[0].estado === 'confirmada'
+          ? "Ya tienes una reserva confirmada para este horario"
+          : "Ya estás registrado en la lista de espera de este horario"
       });
     }
 
-    // 3. Insertar la reserva
-    const estadoReserva = 'pendiente';
-    const sqlInsert = `
-      INSERT INTO reservas (evento_id, usuario_id, fecha, franja_horaria, estado)
-      VALUES (?, ?, ?, ?, ?)
-    `;
-    const [reservaResult] = await pool.query(sqlInsert, [
-      evento_id,
-      usuario_id,
-      fecha,
-      franja_horaria,
-      estadoReserva
-    ]);
+    // 2. Comprobar si ya existe una reserva confirmada de otro socio
+    const [ocupada] = await pool.query(
+      `SELECT id FROM reservas 
+       WHERE (espacio_id = ? OR evento_id = ?) 
+         AND (fecha = ? OR fecha_inicio = ?) 
+         AND franja_horaria = ? 
+         AND estado = 'confirmada'`,
+      [espacioId, espacioId, fecha, fecha, franja_horaria]
+    );
 
-    const nuevaReserva = {
-      id: reservaResult.insertId,
-      evento_id,
-      usuario_id,
-      fecha,
-      franja_horaria,
-      estado: estadoReserva
-    };
+    let estadoReserva = 'confirmada';
+    let mensajeRespuesta = '¡Reserva confirmada al instante!';
+    let turnoEspera = 0;
 
-    console.log("Reserva creada con éxito:", nuevaReserva);
+    if (ocupada.length > 0) {
+      estadoReserva = 'en_espera';
+      const [conteoEspera] = await pool.query(
+        `SELECT COUNT(*) as total FROM reservas 
+         WHERE (espacio_id = ? OR evento_id = ?) 
+           AND (fecha = ? OR fecha_inicio = ?) 
+           AND franja_horaria = ? 
+           AND estado = 'en_espera'`,
+        [espacioId, espacioId, fecha, fecha, franja_horaria]
+      );
+      turnoEspera = (conteoEspera[0]?.total || 0) + 1;
+      mensajeRespuesta = `Horario ocupado. Te has inscrito en la Lista de Espera (Turno #${turnoEspera}).`;
+    }
+
+    // 3. Guardar completando todas las columnas para compatibilidad
+    const [reservaResult] = await pool.query(
+      `INSERT INTO reservas (espacio_id, evento_id, usuario_id, fecha, fecha_inicio, fecha_fin, franja_horaria, estado) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [espacioId, espacioId, usuario_id, fecha, fecha, fecha, franja_horaria, estadoReserva]
+    );
 
     return res.status(201).json({
       success: true,
-      mensaje: "Reserva realizada con éxito",
-      reserva: nuevaReserva
+      tipo: estadoReserva,
+      mensaje: mensajeRespuesta,
+      reserva: {
+        id: reservaResult.insertId,
+        espacio_id: espacioId,
+        evento_id: espacioId,
+        usuario_id,
+        fecha,
+        franja_horaria,
+        estado: estadoReserva,
+        turno_espera: turnoEspera
+      }
     });
 
   } catch (error) {
@@ -421,14 +301,21 @@ app.post("/api/reservas", async (req, res) => {
   }
 });
 
-// Listar todas las reservas (para admin o usuario)
 app.get("/api/reservas", async (req, res) => {
   try {
-    const { usuario_id, evento_id } = req.query;
+    const { usuario_id, evento_id, espacio_id } = req.query;
     let sql = `
-      SELECT r.*, u.email AS usuario_email, u.nombre AS usuario_nombre
+      SELECT r.*, 
+             COALESCE(r.espacio_id, r.evento_id) AS espacio_id,
+             COALESCE(r.evento_id, r.espacio_id) AS evento_id,
+             COALESCE(r.fecha, r.fecha_inicio) AS fecha,
+             u.email AS usuario_email, 
+             u.nombre AS usuario_nombre,
+             e.nombre AS espacio_nombre,
+             e.ubicacion AS espacio_ubicacion
       FROM reservas r
       LEFT JOIN usuarios u ON r.usuario_id = u.id
+      LEFT JOIN espacios e ON (e.id = r.espacio_id OR e.id = r.evento_id)
     `;
     const params = [];
     const condiciones = [];
@@ -437,57 +324,77 @@ app.get("/api/reservas", async (req, res) => {
       condiciones.push("r.usuario_id = ?");
       params.push(usuario_id);
     }
-    if (evento_id) {
-      condiciones.push("r.evento_id = ?");
-      params.push(evento_id);
+    const idBusqueda = espacio_id || evento_id;
+    if (idBusqueda) {
+      condiciones.push("(r.espacio_id = ? OR r.evento_id = ?)");
+      params.push(idBusqueda, idBusqueda);
     }
 
     if (condiciones.length > 0) {
       sql += " WHERE " + condiciones.join(" AND ");
     }
-
-    sql += " ORDER BY r.fecha DESC, r.franja_horaria ASC";
+    sql += " ORDER BY r.id DESC";
 
     const [rows] = await pool.query(sql, params);
     res.json({ success: true, reservas: rows });
   } catch (error) {
+    console.error("Error al obtener reservas:", error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
-// aceptar o rechazar reservas admin 
-
-app.patch("/api/reservas/:id/estado", async (req, res) => {
+// Cancelar reserva y asignar automáticamente al siguiente en la Lista de Espera
+app.patch(["/api/reservas/:id/cancelar", "/api/reservas/:id/estado"], async (req, res) => {
   const { id } = req.params;
-  const { estado } = req.body; // 'reservado' (o 'confirmada') / 'rechazado'
-  if (!estado) {
-    return res.status(400).json({
-      success: false,
-      mensaje: "El campo 'estado' es obligatorio ('reservado' o 'rechazado')"
-    });
-  }
+  const nuevoEstado = (req.body.estado || 'cancelada').toLowerCase().trim();
+
   try {
-    const [result] = await pool.query(
-      "UPDATE reservas SET estado = ? WHERE id = ?",
-      [estado.toLowerCase().trim(), id]
-    );
-    if (result.affectedRows === 0) {
-      return res.status(404).json({
-        success: false,
-        mensaje: "Reserva no encontrada"
-      });
+    const [reservaRows] = await pool.query("SELECT * FROM reservas WHERE id = ?", [id]);
+    if (reservaRows.length === 0) {
+      return res.status(404).json({ success: false, mensaje: "Reserva no encontrada" });
     }
+
+    const reservaActual = reservaRows[0];
+    const eraConfirmada = reservaActual.estado === 'confirmada';
+    const espId = reservaActual.espacio_id || reservaActual.evento_id;
+    const fec = reservaActual.fecha || reservaActual.fecha_inicio;
+
+    await pool.query("UPDATE reservas SET estado = ? WHERE id = ?", [nuevoEstado, id]);
+
+    let socioPromovido = null;
+
+    if (eraConfirmada && nuevoEstado === 'cancelada') {
+      const [enEspera] = await pool.query(
+        `SELECT r.*, u.email as usuario_email, u.nombre as usuario_nombre 
+         FROM reservas r
+         LEFT JOIN usuarios u ON r.usuario_id = u.id
+         WHERE (r.espacio_id = ? OR r.evento_id = ?) 
+           AND (r.fecha = ? OR r.fecha_inicio = ?) 
+           AND r.franja_horaria = ? 
+           AND r.estado = 'en_espera'
+         ORDER BY r.id ASC LIMIT 1`,
+        [espId, espId, fec, fec, reservaActual.franja_horaria]
+      );
+
+      if (enEspera.length > 0) {
+        socioPromovido = enEspera[0];
+        await pool.query("UPDATE reservas SET estado = 'confirmada' WHERE id = ?", [socioPromovido.id]);
+        console.log(`Pista asignada automáticamente al socio en lista de espera ID ${socioPromovido.id}`);
+      }
+    }
+
     return res.json({
       success: true,
-      mensaje: `Reserva marcada como ${estado}`,
+      mensaje: socioPromovido
+        ? "Reserva cancelada. Pista asignada automáticamente al primer socio en lista de espera."
+        : "Reserva cancelada correctamente.",
       reserva_id: id,
-      nuevo_estado: estado
+      socio_promovido: socioPromovido ? socioPromovido.id : null
     });
   } catch (error) {
-    console.error("Error al actualizar estado de la reserva:", error);
+    console.error("Error al cancelar reserva:", error);
     return res.status(500).json({ success: false, error: error.message });
   }
 });
 
 module.exports = app;
-

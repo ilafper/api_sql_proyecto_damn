@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node ./api/index.js",
     "dev": "node --watch api/index.js",
+    "seed:admin": "node crear_admin.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "author": "",
