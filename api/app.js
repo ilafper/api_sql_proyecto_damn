@@ -1,14 +1,40 @@
 const express = require("express");
 const cors = require("cors");
 const pool = require("./db.js");
-
+const multer = require("multer");
 const app = express();
+const path = require("path");
+const fs = require("fs");
 const jwt = require("jsonwebtoken");
-
-const JWT_SECRET = "mi_clave_secreta_dam";
-
+require("dotenv").config();
+const JWT_SECRET = process.env.JWT_SECRET || "clave_por_defecto_desarrollo";
 app.use(cors());
 app.use(express.json());
+
+
+// Nombre y creación de la carpeta en donde estarán las imágenes
+const uploadDir = path.join(__dirname, "uploads");
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir);
+}
+
+// Configuración de almacenamiento en disco para Multer
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, uploadDir);
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
+    cb(null, "espacio-" + uniqueSuffix + path.extname(file.originalname));
+  }
+});
+
+const upload = multer({ storage: storage });
+
+// Hacer pública la carpeta para que Flutter pueda acceder a las fotos
+app.use("/uploads", express.static(uploadDir));
+
+
 
 // Crear tablas y migrar columnas automáticamente en Laragon
 async function inicializarTabla() {
@@ -61,7 +87,9 @@ async function inicializarTabla() {
       "ALTER TABLE reservas ADD COLUMN fecha DATE NULL",
       "ALTER TABLE reservas ADD COLUMN franja_horaria VARCHAR(50) NULL",
       "ALTER TABLE reservas ADD COLUMN evento_id INT NULL",
-      "ALTER TABLE reservas ADD COLUMN espacio_id INT NULL"
+      "ALTER TABLE reservas ADD COLUMN espacio_id INT NULL",
+      "ALTER TABLE espacios ADD COLUMN imagen_url VARCHAR(255) NULL",
+      "ALTER TABLE espacios ADD COLUMN categoria VARCHAR(50) DEFAULT 'padel'"
     ];
 
     for (const sql of columnasAsegurar) {
@@ -188,29 +216,64 @@ app.get("/api/espacios/:id", async (req, res) => {
   }
 });
 
-app.post("/api/espacios", async (req, res) => {
-  const { nombre, descripcion, ubicacion, capacidad_maxima, precio_por_dia, estado } = req.body;
+
+
+
+
+
+
+// Creacion de eventos / espacios (con imagen opcional)
+app.post("/api/espacios", upload.single("imagen"), async (req, res) => {
+  const { nombre, descripcion, ubicacion, capacidad_maxima, precio_por_dia, estado, categoria } = req.body;
+
   if (!nombre || !capacidad_maxima || precio_por_dia === undefined) {
     return res.status(400).json({ success: false, mensaje: "Nombre, capacidad máxima y precio por día son obligatorios" });
   }
 
+  let imagen_url = null;
+  if (req.file) {
+    imagen_url = `${req.protocol}://${req.get("host")}/uploads/${req.file.filename}`;
+  }
+
+  const categoriaFinal = (categoria || "padel").toLowerCase().trim();
+
   try {
-    const sql = `INSERT INTO espacios (nombre, descripcion, ubicacion, capacidad_maxima, precio_por_dia, estado) VALUES (?, ?, ?, ?, ?, ?)`;
-    const [resultado] = await pool.query(sql, [nombre.trim(), descripcion || "", ubicacion || "", Number(capacidad_maxima), Number(precio_por_dia), estado || "disponible"]);
+    const sql = `INSERT INTO espacios (nombre, descripcion, ubicacion, capacidad_maxima, precio_por_dia, categoria, imagen_url, estado) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`;
+
+    const [resultado] = await pool.query(sql, [
+      nombre.trim(),
+      descripcion || "",
+      ubicacion || "",
+      Number(capacidad_maxima),
+      Number(precio_por_dia),
+      categoriaFinal,
+      imagen_url,
+      estado || "disponible"
+    ]);
 
     res.status(201).json({
       success: true,
       mensaje: "Espacio creado correctamente",
-      espacio: { id: resultado.insertId, nombre, descripcion, ubicacion, capacidad_maxima, precio_por_dia, estado }
+      espacio: {
+        id: resultado.insertId,
+        nombre,
+        descripcion,
+        ubicacion,
+        capacidad_maxima,
+        precio_por_dia,
+        categoria: categoriaFinal,
+        estado: estado || "disponible",
+        imagen_url
+      }
     });
+
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
-// ==========================================
+
 // RESERVAS (CONFIRMACIÓN DIRECTA & LISTA DE ESPERA)
-// ==========================================
 
 app.post("/api/reservas", async (req, res) => {
   const espacioId = req.body.espacio_id || req.body.evento_id;
